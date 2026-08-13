@@ -43,6 +43,21 @@ function parseJsonResponse(raw) {
   return JSON.parse(cleaned);
 }
 
+/** Guarantees every numeric/string field is actually that type, no matter what the AI returned. */
+function sanitizeFoodItem(raw) {
+  const num = (v) => (typeof v === "number" && !isNaN(v) ? v : Number(v) || 0);
+  const confidence = ["high", "medium", "low"].includes(raw?.confidence) ? raw.confidence : "medium";
+  return {
+    name: typeof raw?.name === "string" && raw.name.trim() ? raw.name.trim() : "Bilinmeyen besin",
+    estimatedGrams: num(raw?.estimatedGrams),
+    kcal: num(raw?.kcal),
+    protein: num(raw?.protein),
+    carb: num(raw?.carb),
+    fat: num(raw?.fat),
+    confidence,
+  };
+}
+
 /* ---------------------------------------------------------------------------
  * AI SAĞLAYICI ÇAĞRILARI (Gemini / Anthropic) — bu ikisi arasında geçiş
  * yapmak istersen ekstra bir şey değiştirmene gerek yok, sadece Vercel'deki
@@ -115,7 +130,9 @@ Rules: at most 5 items; use "low" confidence when unsure but still estimate; num
 never negative; empty array if nothing recognizable; all text in ${lang}.`;
 
   const raw = await callAI({ system, userText: "Analyze the foods in this photo and return JSON matching the schema.", imageBase64, imageMediaType: mediaType || "image/jpeg", maxTokens: 1024 });
-  return { items: parseJsonResponse(raw) };
+  const parsed = parseJsonResponse(raw);
+  const items = Array.isArray(parsed) ? parsed.map(sanitizeFoodItem) : [];
+  return { items };
 }
 
 async function handleLookupFood(body) {
@@ -132,7 +149,7 @@ Rules: assume a standard serving if no amount given; numbers must be real number
 best-effort estimate with "low" confidence if unsure; all text in ${lang}.`;
 
   const raw = await callAI({ system, userText: query, maxTokens: 400 });
-  return { item: parseJsonResponse(raw) };
+  return { item: sanitizeFoodItem(parseJsonResponse(raw)) };
 }
 
 /* ---------------------------------------------------------------------------

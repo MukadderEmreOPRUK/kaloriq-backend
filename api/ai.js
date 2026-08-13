@@ -40,17 +40,35 @@ function setCors(res) {
 }
 
 function parseJsonResponse(raw) {
-  const cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
-  return JSON.parse(cleaned);
+  let cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Model sometimes wraps the JSON in extra prose or leaves a trailing
+    // comma — extract the outermost {...} or [...] block and strip trailing
+    // commas before giving up.
+    const match = cleaned.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+    if (match) {
+      const stripped = match[0].replace(/,\s*([}\]])/g, "$1");
+      return JSON.parse(stripped);
+    }
+    throw new Error("AI yanıtı geçerli JSON değildi: " + cleaned.slice(0, 200));
+  }
 }
 
 /** Guarantees every numeric/string field is actually that type, no matter what the AI returned. */
 function sanitizeFoodItem(raw) {
   const num = (v) => (typeof v === "number" && !isNaN(v) ? v : Number(v) || 0);
   const confidence = ["high", "medium", "low"].includes(raw?.confidence) ? raw.confidence : "medium";
+  const estimatedGrams = num(raw?.estimatedGrams) || 100;
   return {
     name: typeof raw?.name === "string" && raw.name.trim() ? raw.name.trim() : "Bilinmeyen besin",
-    estimatedGrams: num(raw?.estimatedGrams),
+    estimatedGrams,
+    // Tek bir "adet"in kaç gram olduğu (örn. 1 yumurta ~50g). Besin tek tek
+    // sayılabilir bir şey değilse (çorba, pilav gibi) AI'nin verdiği toplam
+    // gram tahminine eşit kalır — bu durumda "adet" alanı anlamsız olur ama
+    // yine de bir sayı döner, çökmeye yol açmaz.
+    gramsPerUnit: num(raw?.gramsPerUnit) || estimatedGrams,
     kcal: num(raw?.kcal),
     protein: num(raw?.protein),
     carb: num(raw?.carb),
@@ -148,13 +166,20 @@ async function handleLookupFood(body) {
   if (!query || typeof query !== "string") throw new Error("query alanı gerekli.");
   const lang = languageName(language);
   const system = `You are a nutrition database assistant. You'll get free text naming a food and optionally
-an amount (e.g. "a slice of watermelon", "200g lentil soup").
+an amount (e.g. "a slice of watermelon", "200g lentil soup", "egg").
 
-Respond with ONLY a single JSON object, no other text, no code fences:
-{"name": "food name with amount, written in ${lang}", "estimatedGrams": number, "kcal": number, "protein": number, "carb": number, "fat": number, "confidence": "high" | "medium" | "low"}
+Respond with ONLY a single JSON object, no other text, no code fences, no trailing commas:
+{"name": "food name, written in ${lang}, without the amount", "estimatedGrams": number, "gramsPerUnit": number, "kcal": number, "protein": number, "carb": number, "fat": number, "confidence": "high" | "medium" | "low"}
 
-Rules: assume a standard serving if no amount given; numbers must be real numbers, never negative;
-best-effort estimate with "low" confidence if unsure; all text in ${lang}.`;
+Field notes:
+- estimatedGrams: total grams for the amount described (or a standard single serving if no amount given).
+- gramsPerUnit: how many grams ONE typical countable piece/unit of this food weighs (e.g. one egg ≈ 50,
+  one banana ≈ 120). If the food isn't naturally countable (soup, rice, a drink), set gramsPerUnit equal
+  to a sensible single-portion weight instead.
+- kcal/protein/carb/fat are for the estimatedGrams amount, not per 100g.
+
+Rules: numbers must be real numbers, never negative, never null; best-effort estimate with "low"
+confidence if unsure; all text in ${lang}.`;
 
   const raw = await callAI({ system, userText: query, maxTokens: 400 });
   return { item: sanitizeFoodItem(parseJsonResponse(raw)) };

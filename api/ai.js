@@ -96,7 +96,14 @@ async function callGemini({ system, userText, imageBase64, imageMediaType, maxTo
     body: JSON.stringify({
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts }],
-      generationConfig: { maxOutputTokens: maxTokens },
+      generationConfig: {
+        maxOutputTokens: maxTokens,
+        // Gemini 3.x modelleri varsayılan olarak görünmeyen bir "düşünme"
+        // aşaması kullanıyor ve bu da maxOutputTokens hakkından harcanıyor —
+        // basit JSON görevleri için bunu kapatıyoruz, yoksa gerçek cevaba
+        // sıra gelmeden yanıt kesilebiliyor.
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     }),
   });
   if (!response.ok) throw new Error(`Gemini API hatası (${response.status}): ${await response.text().catch(() => "")}`);
@@ -181,7 +188,7 @@ Field notes:
 Rules: numbers must be real numbers, never negative, never null; best-effort estimate with "low"
 confidence if unsure; all text in ${lang}.`;
 
-  const raw = await callAI({ system, userText: query, maxTokens: 400 });
+  const raw = await callAI({ system, userText: query, maxTokens: 800 });
   return { item: sanitizeFoodItem(parseJsonResponse(raw)) };
 }
 
@@ -211,7 +218,7 @@ Respond with ONLY a single JSON object, no other text, no code fences:
 Rules: if no duration is given, assume a reasonable default (e.g. 30 minutes); numbers must be real numbers,
 never negative; the "name" field must be written in ${lang}.`;
 
-  const raw = await callAI({ system, userText: query, maxTokens: 300 });
+  const raw = await callAI({ system, userText: query, maxTokens: 600 });
   return { item: sanitizeExerciseItem(parseJsonResponse(raw)) };
 }
 

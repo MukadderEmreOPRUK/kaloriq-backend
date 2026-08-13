@@ -3,13 +3,14 @@
  *  KALORİQ — TEK DOSYA AI SUNUCUSU (Vercel'e deploy edilir)
  * ============================================================================
  *
- *  Bu tek dosya, uygulamanın iki yapay zekâ özelliğinin hepsine bakıyor:
+ *  Bu tek dosya, uygulamanın üç yapay zekâ özelliğinin hepsine bakıyor:
  *    - Fotoğraftan besin analizi
  *    - Yazarak besin arama
+ *    - Yazarak egzersiz kalorisi tahmini
  *
  *  Uygulama (App.tsx) buraya her zaman aynı adrese (/api/ai) istek atıyor,
  *  isteğin içindeki "action" alanına göre bu dosya hangi işi yapacağını
- *  anlıyor. Böylece tek bir dosyada iki ayrı özelliği yönetebiliyoruz.
+ *  anlıyor. Böylece tek bir dosyada üç ayrı özelliği yönetebiliyoruz.
  *
  *  "BURAYI DEĞİŞTİRECEKSİN" — Vercel'de bu ortam değişkenlerinden EN AZ
  *  birini tanımlaman gerekiyor (README'de adım adım anlatılıyor):
@@ -126,8 +127,9 @@ async function handleAnalyzeFood(body) {
   const { imageBase64, mediaType, language } = body;
   if (!imageBase64) throw new Error("imageBase64 alanı gerekli.");
   const lang = languageName(language);
-  const system = `You are a nutrition expert analyzing a food photo. Identify each distinct food item and
-estimate a realistic portion (in grams) and its nutrition.
+  const system = `You are a nutrition expert analyzing a food photo. Identify each distinct food OR DRINK item
+(meals, snacks, beverages — anything edible or drinkable in the photo) and estimate a realistic portion
+(in grams, or milliliters treated as grams for drinks) and its nutrition.
 
 Respond with ONLY a JSON array matching this schema, no other text, no code fences, no markdown:
 [{"name": "food name, written in ${lang}", "estimatedGrams": number, "kcal": number, "protein": number, "carb": number, "fat": number, "confidence": "high" | "medium" | "low"}]
@@ -158,6 +160,36 @@ best-effort estimate with "low" confidence if unsure; all text in ${lang}.`;
   return { item: sanitizeFoodItem(parseJsonResponse(raw)) };
 }
 
+/** Guarantees every field of an exercise estimate is the right type, no matter what the AI returned. */
+function sanitizeExerciseItem(raw) {
+  const num = (v) => (typeof v === "number" && !isNaN(v) ? v : Number(v) || 0);
+  return {
+    name: typeof raw?.name === "string" && raw.name.trim() ? raw.name.trim() : "Egzersiz",
+    durationMinutes: num(raw?.durationMinutes),
+    kcal: num(raw?.kcal),
+  };
+}
+
+async function handleEstimateExercise(body) {
+  const { query, weightKg, language } = body;
+  if (!query || typeof query !== "string") throw new Error("query alanı gerekli.");
+  const lang = languageName(language);
+  const weight = Number(weightKg) > 0 ? Number(weightKg) : 70;
+  const system = `You are a fitness expert estimating calories burned from a free-text description of an
+activity, e.g. "30 minutes running", "1 hour swimming", "yoga for 45 min". The person weighs ${weight} kg —
+use standard MET (Metabolic Equivalent of Task) values and the formula kcal = MET * 3.5 * weightKg / 200 * minutes
+to compute a realistic estimate.
+
+Respond with ONLY a single JSON object, no other text, no code fences:
+{"name": "activity name, written in ${lang}", "durationMinutes": number, "kcal": number}
+
+Rules: if no duration is given, assume a reasonable default (e.g. 30 minutes); numbers must be real numbers,
+never negative; the "name" field must be written in ${lang}.`;
+
+  const raw = await callAI({ system, userText: query, maxTokens: 300 });
+  return { item: sanitizeExerciseItem(parseJsonResponse(raw)) };
+}
+
 /* ---------------------------------------------------------------------------
  * VERCEL GİRİŞ NOKTASI — hangi "action" geldiyse ona göre yukarıdaki iki
  * fonksiyondan birine yönlendiriyor.
@@ -177,8 +209,11 @@ module.exports = async (req, res) => {
       case "lookupFood":
         res.status(200).json(await handleLookupFood(body));
         break;
+      case "estimateExercise":
+        res.status(200).json(await handleEstimateExercise(body));
+        break;
       default:
-        res.status(400).json({ error: 'Geçersiz "action" alanı. "analyzeFood" veya "lookupFood" olmalı.' });
+        res.status(400).json({ error: 'Geçersiz "action" alanı. "analyzeFood", "lookupFood" veya "estimateExercise" olmalı.' });
     }
   } catch (err) {
     res.status(500).json({ error: err.message || "Bilinmeyen hata." });

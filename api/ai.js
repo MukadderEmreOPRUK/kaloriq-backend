@@ -107,9 +107,15 @@ async function callAnthropic({ system, userText, imageBase64, imageMediaType, ma
 
 async function callAI(args) {
   const provider = resolveProvider();
-  if (provider === "gemini") return callGemini(args);
-  if (provider === "anthropic") return callAnthropic(args);
-  throw new Error("Hiçbir AI sağlayıcısı ayarlanmadı. Vercel'de GEMINI_API_KEY (ücretsiz) veya ANTHROPIC_API_KEY tanımla.");
+  if (!provider) {
+    throw new Error("Hiçbir AI sağlayıcısı ayarlanmadı. Vercel'de GEMINI_API_KEY (ücretsiz) veya ANTHROPIC_API_KEY tanımla.");
+  }
+  const call = provider === "gemini" ? callGemini(args) : callAnthropic(args);
+  // AI sağlayıcısı yanıt vermezse istek sonsuza kadar askıda kalmasın diye
+  // 20 saniyelik bir üst sınır koyuyoruz — Vercel'in kendi zaman aşımından
+  // önce, temiz bir hata mesajıyla dönüyoruz.
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("AI sağlayıcısından zamanında yanıt alınamadı (zaman aşımı).")), 20000));
+  return Promise.race([call, timeout]);
 }
 
 /* ---------------------------------------------------------------------------
